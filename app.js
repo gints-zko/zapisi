@@ -1,8 +1,9 @@
-/* ЗКО Онлайн-записи v1.2.2 — клиентская часть (PWA). Секретов в файле нет; адрес шлюза берётся из config.json. */
+/* ЗКО Онлайн-записи v1.2.3 — клиентская часть (PWA). Секретов в файле нет; адрес шлюза берётся из config.json. */
 (function () {
 'use strict';
-var CFG = {}, TOKEN = '', APP = document.getElementById('app'), TIMER = null, VERSION = 'v1.2.2', DEMO = false, MEM = {};
+var CFG = {}, TOKEN = '', APP = document.getElementById('app'), TIMER = null, VERSION = 'v1.2.3', DEMO = false, MEM = {};
 var ERR = {
+  bad_instagram: 'Укажите ссылку на Instagram или имя вида @name.', ig_premium: 'Ссылка на Instagram доступна на тарифе VIP Premium.', no_photo: 'Фото не найдено.', photo_unavailable: 'Фото сейчас недоступно.',
   auth_required: 'Нужно войти.', pin_required: 'Введите ПИН-код.', not_master: 'Этот номер не зарегистрирован как мастер.', blocked: 'Кабинет заблокирован администратором.',
   bad_code: 'Неверный код.', code_dead: 'Код сгорел после 3 ошибок. Получите новый.', code_expired: 'Код устарел. Получите новый.', code_not_sent: 'Сначала откройте бота и поделитесь номером.',
   bad_pin: 'Неверный ПИН-код.', pin_locked: 'Слишком много ошибок. Подождите 15 минут.', bad_pin_format: 'ПИН — ровно 4 цифры.', bad_name: 'Введите имя (от 2 букв).', bad_slug: 'Адрес: 3–30 символов, латиница, цифры и «_». Это слово занято системой или не подходит.',
@@ -50,7 +51,7 @@ function $$(s, r) { return Array.prototype.slice.call((r || APP).querySelectorAl
 function go(h) { location.hash = h; }
 function load(fn) { APP.insertAdjacentHTML('beforeend', '<p class="muted center" id="ld">…</p>'); return fn().then(function (x) { var l = $('#ld'); if (l) l.remove(); return x; }, function (e) { var l = $('#ld'); if (l) l.remove(); toast(errText(e)); throw e; }); }
 
-/* ---------- v1.2.2: тарифы, категории, подсказки, навигация, статистика ---------- */
+/* ---------- v1.2.3: тарифы, категории, подсказки, навигация, статистика ---------- */
 var CART = 'https://zko-spravochnik.github.io/cartoteka/';
 function cartUrl() { return CFG.cartUrl || CART; }
 function dmy(x) { return String(x || '').split('-').reverse().join('.'); }
@@ -108,7 +109,7 @@ var CONSENT_ERR = 'Поставьте галочку согласия на об�
 function loginBlock(onDone, opts) {
   opts = opts || {};
   var box = document.createElement('div'); box.className = 'card';
-  box.innerHTML = (opts.noBack ? '' : '<button class="back" id="lgBack">⬅️ Назад на главную</button>') + tgNotice() + '<b>' + esc(opts.title || 'Вход по номеру телефона') + '</b><p class="muted small">Нажмите кнопку — откроется наш Телеграм-бот. Поделитесь номером, бот сразу пришлёт 4 цифры. Вернитесь сюда и введите их.</p>' + consentHtml() + '<button class="btn" id="lgGet">✈️ Получить код в Телеграм</button><div id="lgCode" hidden><input class="code" id="lgIn" inputmode="numeric" maxlength="4" placeholder="••••" autocomplete="one-time-code"><button class="btn ok" id="lgOk">Подтвердить код</button><p class="muted small center">Бот не ответил? Откройте его ещё раз и нажмите «Старт».</p></div><div id="lgErr"></div>';
+  box.innerHTML = (opts.noBack ? '' : '<button class="back" id="lgBack">⬅️ Назад на главную</button>') + tgNotice() + '<b>' + esc(opts.title || 'Вход по номеру телефона') + '</b><p class="muted small">Нажмите кнопку — откроется наш Телеграм-бот. Поделитесь номером, бот сразу пришлёт 4 цифры. Вернитесь сюда и введите их.</p>' + consentHtml() + '<button class="btn" id="lgGet">✈️ Получить код в Телеграм</button><div id="lgCode" hidden><input class="code" id="lgIn" inputmode="numeric" maxlength="4" placeholder="••••" autocomplete="one-time-code"><button class="btn ok" id="lgOk">Подтвердить код</button><p class="muted small center">Бот открылся без кода? Нажмите в нём «Старт» или кнопку «🔑 Код для входа на сайт» (в течение 3 минут после нажатия здесь).</p></div><div id="lgErr"></div>';
   var req = ''; consentBind(box); var lb = box.querySelector('#lgBack'); if (lb) lb.onclick = function () { go('#/'); route(); };
   function err(t) { box.querySelector('#lgErr').innerHTML = t ? '<div class="err">' + esc(t) + '</div>' : ''; }
   box.querySelector('#lgGet').onclick = function () {
@@ -146,7 +147,7 @@ function whatsNew(force) {
 var HS = { village: '', category: '' };
 function home() {
   navShow(true, 'home');
-  view('<h1>Онлайн-запись к мастерам ЗКО</h1><p class="muted">Выберите мастера и время — он получит уведомление в Телеграме.</p>' + tgNotice() + '<div class="btnrow"><button class="btn" id="hMy">📋 Мои записи</button><button class="btn sec" id="hCab">✂️ Кабинет мастера / Регистрация</button></div><div class="card"><b>Найти мастера</b><label>Село</label><select id="hVil"><option value="">Все сёла</option></select><label>Категория</label><select id="hCat">' + catOptions(HS.category, 'Все категории') + '</select></div><div id="hList"><p class="muted center">Загрузка мастеров…</p></div><button class="btn demo" id="hDemo">🎮 Попробовать демо (без регистрации)</button><div class="card"><b>Как записаться?</b><p class="muted small">Выберите мастера в списке выше, откройте ссылку, которую вам прислал мастер, или нажмите «Записаться онлайн» в карточке мастера в «Картотеке ЗКО». Отметьте услуги и время, подтвердите номер кодом из Телеграма — и запись готова.</p></div><button class="btn sec" id="hCart">📖 Вернуться в Картотеку ЗКО</button><p class="muted small center">' + VERSION + '</p>');
+  view('<h1>Онлайн-запись к мастерам ЗКО</h1><p class="muted">Выберите мастера и время — он получит уведомление в Телеграме.</p>' + tgNotice() + '<div class="btnrow"><button class="btn" id="hMy">📋 Мои записи</button><button class="btn sec" id="hCab">✂️ Кабинет мастера / Регистрация</button></div><div class="card"><h3>Найти мастера</h3><hr class="sep"><label>Село</label><select id="hVil"><option value="">Все сёла</option></select><label>Категория</label><select id="hCat">' + catOptions(HS.category, 'Все категории') + '</select></div><div id="hList"><p class="muted center">Загрузка мастеров…</p></div><button class="btn demo" id="hDemo">🎮 Попробовать демо (без регистрации)</button><div class="card"><b>Как записаться?</b><p class="muted small">Выберите мастера в списке выше, откройте ссылку, которую вам прислал мастер, или нажмите «Записаться онлайн» в карточке мастера в «Картотеке ЗКО». Отметьте услуги и время, подтвердите номер кодом из Телеграма — и запись готова.</p></div><button class="btn sec" id="hCart">📖 Вернуться в Картотеку ЗКО</button><p class="muted small center">' + VERSION + '</p>');
   $('#hMy').onclick = function () { go('#/my'); };
   $('#hCab').onclick = function () { go('#/cab'); };
   $('#hDemo').onclick = function () { enterDemo(); };
@@ -222,7 +223,7 @@ function cats() { var m = {}, o = []; P.d.services.forEach(function (s) { if (!m
 function sumSel() { var n = 0, t = 0, m = 0; P.d.services.forEach(function (s) { if (P.sel[s.id]) { n++; t += s.price; m += s.minutes; } }); return { n: n, t: t, m: m }; }
 function renderMaster() {
   var d = P.d, c = cats(), r = d.rating, s = sumSel();
-  var h = '<div class="card"><h1>' + esc(d.master.name) + ' ' + tierBadge(d.master.tier) + '</h1>' + masterMeta(d.master) + (r.count ? '<div>' + stars(r.avg) + ' <b>' + r.avg + '</b> <span class="muted">· оценок: ' + r.count + '</span></div>' : '<div class="muted small">Оценок пока нет</div>') + (d.master.about ? '<p class="muted">' + esc(d.master.about) + '</p>' : '') + '<button class="btn sec sm" id="mRev">⭐ Отзывы</button></div>';
+  var h = '<div class="card"><h1>' + esc(d.master.name) + ' ' + tierBadge(d.master.tier) + '</h1>' + masterMeta(d.master) + (r.count ? '<div>' + stars(r.avg) + ' <b>' + r.avg + '</b> <span class="muted">· оценок: ' + r.count + '</span></div>' : '<div class="muted small">Оценок пока нет</div>') + (d.master.about ? '<p class="muted">' + esc(d.master.about) + '</p>' : '') + '<button class="btn sec sm" id="mRev">⭐ Отзывы</button></div>' + galleryHtml(d.master.photos || [], d.master.instagram || '');
   if (!d.services.length) h += '<div class="card muted">У мастера пока нет услуг.</div>';
   else if (P.cat === null && c.order.length > 1) {
     h += '<h2>Выберите раздел</h2><div class="tiles">' + c.order.map(function (k, i) { var cnt = c.map[k].filter(function (x) { return P.sel[x.id]; }).length; return '<button class="tile' + (cnt ? ' on' : '') + '" data-c="' + esc(k) + '"><span class="em">' + EM[i % EM.length] + '</span>' + esc(k) + '<span class="n">' + c.map[k].length + ' усл.' + (cnt ? ' · выбрано ' + cnt : '') + '</span></button>'; }).join('') + '</div>';
@@ -231,7 +232,7 @@ function renderMaster() {
     h += (c.order.length > 1 ? '<button class="back" id="mBack">⬅️ Назад к разделам</button>' : '') + '<h2>' + esc(key) + '</h2>' + c.map[key].map(function (x) { return '<button class="svc' + (P.sel[x.id] ? ' on' : '') + '" data-s="' + esc(x.id) + '"><span class="chk">' + (P.sel[x.id] ? '✓' : '') + '</span><span class="t">' + esc(x.title) + '<br><span class="m">' + dur(x.minutes) + '</span></span><span class="p">' + money(x.price) + '</span></button>'; }).join('');
   }
   h += '<div class="bar"><div class="in">' + (s.n ? '<div class="row"><b>Выбрано: ' + s.n + '</b><span style="text-align:right"><b>' + money(s.t) + '</b> · ' + dur(s.m) + '</span></div>' : '<div class="muted center small">Отметьте одну или несколько услуг</div>') + '<button class="btn" id="mNext"' + (s.n ? '' : ' disabled') + '>🕒 Выбрать время</button></div></div>';
-  view(h);
+  view(h); galleryBind();
   $$('.tile').forEach(function (b) { b.onclick = function () { P.cat = b.getAttribute('data-c'); renderMaster(); }; });
   $$('.svc').forEach(function (b) { b.onclick = function () { var id = b.getAttribute('data-s'); if (P.sel[id]) delete P.sel[id]; else P.sel[id] = 1; var y = window.scrollY; renderMaster(); window.scrollTo(0, y); }; });
   var bk = $('#mBack'); if (bk) bk.onclick = function () { P.cat = null; renderMaster(); };
@@ -352,7 +353,7 @@ function pinPage() {
 
 /* ---------- кабинет мастера ---------- */
 var CAB = null;
-var TABS = [['rec', '📋 Записи'], ['svc', '💈 Услуги'], ['wk', '🕒 График'], ['cl', '🚫 Клиенты'], ['rv', '⭐ Отзывы'], ['bal', '💎 Тарифы']];
+var TABS = [['rec', '📋 Записи'], ['svc', '💈 Услуги'], ['wk', '🕒 График'], ['cl', '🚫 Клиенты'], ['rv', '⭐ Отзывы'], ['ph', '📸 Фото работ'], ['bal', '💎 Тарифы']];
 function cab(tab) {
   navShow(true, 'cab');
   ls('zk_tab', tab);
@@ -362,7 +363,7 @@ function cab(tab) {
   $('#cp').onclick = function () { try { navigator.clipboard.writeText(link); toast('Ссылка скопирована'); } catch (e) { $('#lnk').select(); } };
   $('#cNews').onclick = function () { whatsNew(true); };
   $('#cOut').onclick = function () { if (DEMO) { TOKEN = ''; go('#/'); demoHome(); return; } api('logout').catch(function () {}); setToken(''); go('#/'); route(); };
-  ({ rec: tRec, svc: tSvc, wk: tWk, cl: tCl, rv: tRv, bal: tBal, pf: tPf })[tab]($('#tb'));
+  ({ rec: tRec, svc: tSvc, wk: tWk, cl: tCl, rv: tRv, bal: tBal, pf: tPf, ph: tPh })[tab]($('#tb'));
 }
 function refreshCab(tab) { api('me').then(function (j) { CAB = j; cab(tab); }).catch(function (e) { toast(errText(e)); if (e.message === 'pin_required' || e.message === 'auth_required') cabEntry(); }); }
 function tRec(el) {
@@ -412,6 +413,36 @@ function tRv(el) {
   api('reviews', { slug: CAB.master.slug, token: '' }).then(function (j) {
     el.innerHTML = '<h2>Мой рейтинг: ' + (j.rating.count ? j.rating.avg + ' ★ (' + j.rating.count + ')' : 'пока нет') + '</h2>' + (j.reviews.length ? j.reviews.map(function (r) { return '<div class="card">' + stars(r.stars) + ' <b>' + esc(r.name) + '</b> <span class="muted small">' + esc(r.date) + '</span><p>' + esc(r.comment || '') + '</p></div>'; }).join('') : '<div class="card muted">Оценки приходят только после завершённых визитов. Отмечайте визиты кнопкой «✔ Визит завершён».</div>');
   });
+}
+/* ---------- фото работ ---------- */
+var PHC = {};
+function photoSrc(id, img) { if (PHC[id]) { img.src = PHC[id]; return; } api('photoData', { id: id, token: '' }).then(function (j) { PHC[id] = j.data; img.src = j.data; }).catch(function () { img.alt = '—'; }); }
+function galleryHtml(ph, ig) {
+  if (!ph.length && !ig) return '';
+  return '<div class="card"><b>📸 Работы мастера</b>' + (ph.length ? '<div class="gal">' + ph.map(function (id) { return '<img data-p="' + esc(id) + '" alt="Фото работы" loading="lazy">'; }).join('') + '</div>' : '') + (ig ? '<a class="btn sec sm" target="_blank" rel="noopener" href="' + esc(ig) + '">📷 Смотреть работы в Instagram</a>' : '') + '</div>';
+}
+function galleryBind() {
+  $$('.gal img').forEach(function (im) { photoSrc(im.getAttribute('data-p'), im); im.onclick = function () { if (!im.src) return; var lb = document.createElement('div'); lb.className = 'lb'; lb.innerHTML = '<img src="' + im.src + '" alt="">'; lb.onclick = function () { lb.remove(); }; document.body.appendChild(lb); }; });
+}
+function tPh(el) {
+  el.innerHTML = '<p class="muted center">Загрузка…</p>';
+  api('photoList').then(function (j) {
+    var prem = j.level === 'premium', h = '<h2>📸 Фото работ</h2>';
+    if (!j.limit) {
+      el.innerHTML = h + '<div class="card"><p>🔒 <b>Фото работ доступны на тарифах VIP Light и VIP Premium.</b></p><p class="muted small">VIP Light — до 3 фото, VIP Premium — до 15 фото и ссылка на ваш Instagram. Фото в карточке мастера привлекают больше клиентов.</p><button class="btn" id="phT">💎 Выбрать тариф</button></div>';
+      $('#phT', el).onclick = function () { cab('bal'); }; return;
+    }
+    h += '<div class="muted small">Загружено ' + j.photos.length + ' из ' + j.limit + '. Фото добавляются через нашего Телеграм-бота: нажмите кнопку, отправьте боту фото (как обычное фото) — оно появится здесь.</div>';
+    h += '<div class="gal">' + j.photos.map(function (x) { return '<div class="ph"><img data-p="' + esc(x.id) + '" alt="Фото работы"><button class="btn red sm" data-x="' + esc(x.id) + '">🗑 Удалить</button></div>'; }).join('') + '</div>';
+    h += (DEMO ? '<p class="muted small">В демо фото загружаются через бота, поэтому здесь показаны примеры работ.</p>' : '<a class="btn" target="_blank" rel="noopener" href="https://t.me/' + esc(j.bot || 'zko_onlayn_zapis_bot') + '">➕ Загрузить фото в Telegram</a><button class="btn sec sm" id="phR">🔄 Обновить список</button>');
+    h += prem ? '<div class="card"><h3>Instagram</h3><hr class="sep"><p class="muted small">Кнопка «📷 Смотреть работы в Instagram» появится в вашей карточке.</p><input id="phIg" maxlength="100" placeholder="@ваш_аккаунт или ссылка" value="' + esc((j.instagram || '').replace('https://instagram.com/', '@')) + '"><button class="btn ok sm" id="phIgS">Сохранить ссылку</button></div>' : '<p class="muted small">🔒 Ссылка на Instagram доступна на тарифе VIP Premium.</p>';
+    h += '<div id="phE"></div>';
+    el.innerHTML = h;
+    $$('.gal img', el).forEach(function (im) { photoSrc(im.getAttribute('data-p'), im); });
+    $$('[data-x]', el).forEach(function (b) { b.onclick = function () { if (!confirm('Удалить это фото?')) return; api('photoDelete', { id: b.getAttribute('data-x') }).then(function () { toast('Фото удалено'); tPh(el); }).catch(function (e) { toast(errText(e)); }); }; });
+    var r = $('#phR', el); if (r) r.onclick = function () { tPh(el); };
+    var sv = $('#phIgS', el); if (sv) sv.onclick = function () { api('profileSave', { name: CAB.master.name, about: CAB.master.about, instagram: $('#phIg').value }).then(function () { toast('Сохранено'); }).catch(function (e) { $('#phE', el).innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; }); };
+  }).catch(function (e) { el.innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; });
 }
 function tBal(el) {
   var s = CAB.sub, k = CAB.kaspi || {}, ok = !s.needCard, pr = CAB.premium || [];
