@@ -1,7 +1,7 @@
-/* ЗКО Онлайн-записи v1.2.4 — клиентская часть (PWA). Секретов в файле нет; адрес шлюза берётся из config.json. */
+/* ЗКО Онлайн-записи v1.2.5 — клиентская часть (PWA). Секретов в файле нет; адрес шлюза берётся из config.json. */
 (function () {
 'use strict';
-var CFG = {}, TOKEN = '', APP = document.getElementById('app'), TIMER = null, VERSION = 'v1.2.4', DEMO = false, MEM = {};
+var CFG = {}, TOKEN = '', APP = document.getElementById('app'), TIMER = null, VERSION = 'v1.2.5', DEMO = false, MEM = {};
 var ERR = {
   bad_instagram: 'Укажите ссылку на Instagram или имя вида @name.', ig_premium: 'Ссылка на Instagram доступна на тарифе VIP Premium.', no_photo: 'Фото не найдено.', photo_unavailable: 'Фото сейчас недоступно.',
   auth_required: 'Нужно войти.', pin_required: 'Введите ПИН-код.', not_master: 'Этот номер не зарегистрирован как мастер.', blocked: 'Кабинет заблокирован администратором.',
@@ -51,7 +51,7 @@ function $$(s, r) { return Array.prototype.slice.call((r || APP).querySelectorAl
 function go(h) { location.hash = h; }
 function load(fn) { APP.insertAdjacentHTML('beforeend', '<p class="muted center" id="ld">…</p>'); return fn().then(function (x) { var l = $('#ld'); if (l) l.remove(); return x; }, function (e) { var l = $('#ld'); if (l) l.remove(); toast(errText(e)); throw e; }); }
 
-/* ---------- v1.2.4: тарифы, категории, подсказки, навигация, статистика ---------- */
+/* ---------- v1.2.5: тарифы, категории, подсказки, навигация, статистика ---------- */
 var CART = 'https://zko-spravochnik.github.io/cartoteka/';
 function cartUrl() { return CFG.cartUrl || CART; }
 function dmy(x) { return String(x || '').split('-').reverse().join('.'); }
@@ -144,23 +144,58 @@ function whatsNew(force) {
     document.getElementById('wnOk').onclick = function () { ls('zk_whatsnew_ver', VERSION); box.remove(); };
   });
 }
-var HS = { village: '', category: '' };
+/* ---------- Область ➡️ Район ➡️ Село (справочник Картотеки ЗКО, только названия) ---------- */
+var GEOIDX = null;
+function geoIdx() { if (GEOIDX) return GEOIDX; GEOIDX = {}; ((typeof ZKGEO !== 'undefined' && ZKGEO.r) || []).forEach(function (r) { r.d.forEach(function (d) { d.v.forEach(function (v) { if (!GEOIDX[v]) GEOIDX[v] = { r: r.n, d: d.n }; }); }); }); return GEOIDX; }
+function mGeo(m) { var g = m.village && geoIdx()[m.village]; return { r: m.region || (g ? g.r : ''), d: m.district || (g ? g.d : ''), v: m.village || '' }; }
+function geoPick(root, st, o) {
+  var ms = o.ms ? o.ms.map(mGeo) : null, pk = false, lastKey = '', adding = false;
+  function cnt(l, n) { return ms.filter(function (g) { return l === 0 ? g.r === n : (l === 1 ? g.r === st.r && g.d === n : g.r === st.r && g.d === st.d && g.v === n); }).length; }
+  function names(l) {
+    var R = (typeof ZKGEO !== 'undefined' && ZKGEO.r) || [], a = [];
+    if (l === 0) a = R.map(function (r) { return r.n; });
+    else R.forEach(function (r) { if (r.n !== st.r) return; r.d.forEach(function (d) { if (l === 1) a.push(d.n); else if (d.n === st.d) a = a.concat(d.v); }); });
+    if (ms) ms.forEach(function (g) { var n = l === 0 ? g.r : (l === 1 ? (g.r === st.r ? g.d : '') : (g.r === st.r && g.d === st.d ? g.v : '')); if (n && a.indexOf(n) < 0) a.push(n); });
+    return a;
+  }
+  function draw() {
+    var l = !st.r ? 0 : (!st.d ? 1 : 2), key = l + '|' + st.r + '|' + st.d; if (key !== lastKey) { pk = false; adding = false; lastKey = key; }
+    var all = names(l), vis = [], hid = [];
+    all.forEach(function (n) { var c = ms ? cnt(l, n) : 1; (c > 0 ? vis : hid).push([n, c]); });
+    vis.sort(function (a, b) { return a[0] < b[0] ? -1 : 1; }); hid.sort(function (a, b) { return a[0] < b[0] ? -1 : 1; });
+    var path = [st.r, st.d, st.v].filter(Boolean), h = '<div class="geo-bar"><span class="muted small">' + (path.length ? '📍 ' + esc(path.join(' › ')) : '📍 ' + (['Выберите область', 'Выберите район', 'Выберите село'][l])) + '</span>' + (path.length ? '<span><button class="btn sec sm" data-g="up">↩ Назад</button><button class="btn sec sm" data-g="clr">✖ Сбросить</button></span>' : '') + '</div>';
+    function item(x, i, isHid) { var sel = (l === 2 && st.v === x[0]); return '<button class="geo' + (sel ? ' on' : '') + '" data-n="' + esc(x[0]) + '"><span>' + esc(x[0]) + '</span>' + (ms ? '<span class="cnt">' + x[1] + '</span>' : '') + '</button>'; }
+    h += vis.map(item).join('');
+    if (ms && !vis.length) h += '<div class="muted small center">Здесь пока нет мастеров.</div>';
+    if (ms && hid.length) h += '<button class="btn sec sm geo-pk" data-g="pk">' + (pk ? '[ – Скрыть остальные ]' : '[ + Показать остальные... ]') + '</button>' + (pk ? '<div>' + hid.map(item).join('') + '</div>' : '');
+    if (o.add && l === 2) h += (adding ? '<div class="card"><label>Название нового посёлка</label><input id="gNew" maxlength="40" placeholder="например Новый посёлок"><button class="btn ok sm" data-g="addok">Добавить</button></div>' : '<button class="btn sec sm" data-g="add">[ + Добавить новый посёлок... ]</button>');
+    if (o.add && l === 2 && st.v && all.indexOf(st.v) < 0) h += '<div class="muted small">Выбрано: с. ' + esc(st.v) + ' (новый)</div>';
+    root.innerHTML = h;
+    $$('[data-n]', root).forEach(function (b) { b.onclick = function () { var n = b.getAttribute('data-n'); if (l === 0) { st.r = n; st.d = ''; st.v = ''; } else if (l === 1) { st.d = n; st.v = ''; } else st.v = (st.v === n && !o.add) ? '' : n; draw(); o.onChange && o.onChange(st); }; });
+    $$('[data-g]', root).forEach(function (b) { b.onclick = function () { var g = b.getAttribute('data-g'); if (g === 'up') { if (st.v) st.v = ''; else if (st.d) st.d = ''; else st.r = ''; } else if (g === 'clr') { st.r = st.d = st.v = ''; } else if (g === 'pk') { pk = !pk; draw(); return; } else if (g === 'add') { adding = true; draw(); return; } else if (g === 'addok') { var nv = ($('#gNew', root).value || '').trim().slice(0, 40); if (nv.length < 2) { toast('Введите название посёлка'); return; } st.v = nv; adding = false; } draw(); o.onChange && o.onChange(st); }; });
+  }
+  draw();
+}
+var HS = { r: '', d: '', v: '', category: '' };
 function home() {
   navShow(true, 'home');
-  view('<h1>Онлайн-запись к мастерам ЗКО</h1><p class="muted">Выберите мастера и время — он получит уведомление в Телеграме.</p>' + tgNotice() + '<div class="btnrow"><button class="btn" id="hMy">📋 Мои записи</button><button class="btn sec" id="hCab">✂️ Кабинет мастера / Регистрация</button></div><div class="card"><h3>Найти мастера</h3><hr class="sep"><label>Село</label><select id="hVil"><option value="">Все сёла</option></select><label>Категория</label><select id="hCat">' + catOptions(HS.category, 'Все категории') + '</select></div><div id="hList"><p class="muted center">Загрузка мастеров…</p></div><button class="btn demo" id="hDemo">🎮 Попробовать демо (без регистрации)</button><div class="card"><b>Как записаться?</b><p class="muted small">Выберите мастера в списке выше, откройте ссылку, которую вам прислал мастер, или нажмите «Записаться онлайн» в карточке мастера в «Картотеке ЗКО». Отметьте услуги и время, подтвердите номер кодом из Телеграма — и запись готова.</p></div><button class="btn sec" id="hCart">📖 Вернуться в Картотеку ЗКО</button><p class="muted small center">' + VERSION + '</p>');
+  view('<h1>Онлайн-запись к мастерам ЗКО</h1><p class="muted">Выберите мастера и время — он получит уведомление в Телеграме.</p>' + tgNotice() + '<div class="btnrow"><button class="btn" id="hMy">📋 Мои записи</button><button class="btn sec" id="hCab">✂️ Кабинет мастера / Регистрация</button></div><div class="card"><h3>Найти мастера</h3><hr class="sep"><div id="hGeo"></div><hr class="sep"><label>Категория</label><select id="hCat">' + catOptions(HS.category, 'Все категории') + '</select></div><div id="hList"><p class="muted center">Загрузка мастеров…</p></div><button class="btn demo" id="hDemo">🎮 Попробовать демо (без регистрации)</button><div class="card"><b>Как записаться?</b><p class="muted small">Выберите мастера в списке выше, откройте ссылку, которую вам прислал мастер, или нажмите «Записаться онлайн» в карточке мастера в «Картотеке ЗКО». Отметьте услуги и время, подтвердите номер кодом из Телеграма — и запись готова.</p></div><button class="btn sec" id="hCart">📖 Вернуться в Картотеку ЗКО</button><p class="muted small center">' + VERSION + '</p>');
   $('#hMy').onclick = function () { go('#/my'); };
   $('#hCab').onclick = function () { go('#/cab'); };
   $('#hDemo').onclick = function () { enterDemo(); };
   $('#hCart').onclick = function () { window.open(cartUrl(), '_blank'); };
-  function load() {
-    api('masters', { village: HS.village, category: HS.category, token: '' }).then(function (j) {
-      var sel = $('#hVil'); if (!sel) return;
-      sel.innerHTML = '<option value="">Все сёла</option>' + j.villages.map(function (v) { return '<option' + (v === HS.village ? ' selected' : '') + '>' + esc(v) + '</option>'; }).join('');
-      $('#hList').innerHTML = j.masters.length ? j.masters.map(function (m) { return '<button class="mcard' + (m.tier !== 'free' ? ' ' + m.tier : '') + '" data-s="' + esc(m.slug) + '"><b>' + esc(m.name) + '</b> ' + tierBadge(m.tier) + '<br><span class="muted small">' + esc([catLabel(m.category), m.village ? 'с. ' + m.village : '', MODEL[m.mode] || '', m.count ? '★ ' + m.rating + ' (' + m.count + ')' : ''].filter(Boolean).join(' · ')) + '</span></button>'; }).join('') : '<div class="card muted center">Мастеров по этим условиям пока нет.</div>';
-      $$('.mcard').forEach(function (b) { b.onclick = function () { masterPage(b.getAttribute('data-s'), '', [], ''); }; });
-    }).catch(function (e) { var l = $('#hList'); if (l) l.innerHTML = '<div class="card muted center small">' + (e.message === 'no_gateway' ? 'Список мастеров появится после подключения сервиса.' : esc(errText(e))) + '</div>'; });
+  var ALLM = [];
+  function drawList() {
+    var f = ALLM.filter(function (m) { var g = mGeo(m); return (!HS.r || g.r === HS.r) && (!HS.d || g.d === HS.d) && (!HS.v || g.v === HS.v); });
+    $('#hList').innerHTML = f.length ? f.map(function (m) { return '<button class="mcard' + (m.tier !== 'free' ? ' ' + m.tier : '') + '" data-s="' + esc(m.slug) + '"><b>' + esc(m.name) + '</b> ' + tierBadge(m.tier) + '<br><span class="muted small">' + esc([catLabel(m.category), m.village ? 'с. ' + m.village : '', MODEL[m.mode] || '', m.count ? '★ ' + m.rating + ' (' + m.count + ')' : ''].filter(Boolean).join(' · ')) + '</span></button>'; }).join('') : '<div class="card muted center">Мастеров по этим условиям пока нет.</div>';
+    $$('.mcard').forEach(function (b) { b.onclick = function () { masterPage(b.getAttribute('data-s'), '', [], ''); }; });
   }
-  $('#hVil').onchange = function () { HS.village = this.value; load(); };
+  function load() {
+    api('masters', { category: HS.category, token: '' }).then(function (j) {
+      if (!$('#hGeo')) return; ALLM = j.masters;
+      geoPick($('#hGeo'), HS, { ms: ALLM, onChange: drawList }); drawList();
+    }).catch(function (e) { var l = $('#hList'); if (l) l.innerHTML = '<div class="card muted small center">' + (e.message === 'no_gateway' ? 'Список мастеров появится после подключения сервиса.' : esc(errText(e))) + '</div>'; });
+  }
   $('#hCat').onchange = function () { HS.category = this.value; load(); };
   load();
 }
@@ -337,9 +372,10 @@ function cabEntry() {
   }).catch(function (e) { if (e.message === 'auth_required') cabEntry(); else view('<div class="err">' + esc(errText(e)) + '</div>'); });
 }
 function regPage() {
-  view('<h1>Регистрация мастера</h1>' + tgNotice() + '<div class="card"><label>Ваше имя или название</label><input id="rn" maxlength="60" placeholder="Анара · Красота"><label>Категория (по ней создаётся адрес вашей страницы)</label><select id="rc">' + catOptions('', '— выберите —') + '</select><label>Село</label><input id="rv" maxlength="40" placeholder="например Дарьинское"><label>Формат приёма</label><select id="rm"><option value="home">Приём у себя (с адресом)</option><option value="visit">Выезд на дом</option><option value="both">Оба варианта</option></select><label>Ваш адрес (для приёма у себя)</label><input id="rd" maxlength="100" placeholder="ул. Центральная, 1"><label>О себе (по желанию)</label><textarea id="ra" rows="3" maxlength="400"></textarea><label>Придумайте ПИН-код (4 цифры)</label><input id="rp" inputmode="numeric" maxlength="4" type="password" placeholder="••••"><p class="muted small">ПИН защищает кабинет на новом устройстве. Запомните его: восстановить может только администратор.</p>' + consentHtml() + '<button class="btn ok" id="rOk">Создать кабинет</button><div id="rE"></div></div>');
+  view('<h1>Регистрация мастера</h1>' + tgNotice() + '<div class="card"><label>Ваше имя или название</label><input id="rn" maxlength="60" placeholder="Анара · Красота"><label>Категория (по ней создаётся адрес вашей страницы)</label><select id="rc">' + catOptions('', '— выберите —') + '</select><label>Где вы принимаете: область ➡️ район ➡️ село</label><div id="rGeo"></div><label>Формат приёма</label><select id="rm"><option value="home">Приём у себя (с адресом)</option><option value="visit">Выезд на дом</option><option value="both">Оба варианта</option></select><label>Ваш адрес (для приёма у себя)</label><input id="rd" maxlength="100" placeholder="ул. Центральная, 1"><label>О себе (по желанию)</label><textarea id="ra" rows="3" maxlength="400"></textarea><label>Придумайте ПИН-код (4 цифры)</label><input id="rp" inputmode="numeric" maxlength="4" type="password" placeholder="••••"><p class="muted small">ПИН защищает кабинет на новом устройстве. Запомните его: восстановить может только администратор.</p>' + consentHtml() + '<button class="btn ok" id="rOk">Создать кабинет</button><div id="rE"></div></div>');
   consentBind(APP);
-  $('#rOk').onclick = function () { if (!$('#rc').value) { $('#rE').innerHTML = '<div class="err">Выберите категорию — по ней мастеру выдаётся адрес страницы.</div>'; return; } if (!consentOn(APP)) { $('#rE').innerHTML = '<div class="err">' + CONSENT_ERR + '</div>'; return; } api('masterRegister', { name: $('#rn').value, about: $('#ra').value, pin: $('#rp').value, category: $('#rc').value, village: $('#rv').value, mode: $('#rm').value, address: $('#rd').value }).then(function () { toast('Кабинет создан!'); cabEntry(); }).catch(function (e) { $('#rE').innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; }); };
+  var RG = { r: '', d: '', v: '' }; geoPick($('#rGeo'), RG, { add: true });
+  $('#rOk').onclick = function () { if (!$('#rc').value) { $('#rE').innerHTML = '<div class="err">Выберите категорию — по ней мастеру выдаётся адрес страницы.</div>'; return; } if (!consentOn(APP)) { $('#rE').innerHTML = '<div class="err">' + CONSENT_ERR + '</div>'; return; } api('masterRegister', { name: $('#rn').value, about: $('#ra').value, pin: $('#rp').value, category: $('#rc').value, region: RG.r, district: RG.d, village: RG.v, mode: $('#rm').value, address: $('#rd').value }).then(function () { toast('Кабинет создан!'); cabEntry(); }).catch(function (e) { $('#rE').innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; }); };
 }
 function pinPage() {
   var v = '';
@@ -497,8 +533,9 @@ function tBal(el) {
 }
 function tPf(el) {
   var m = CAB.master;
-  el.innerHTML = '<h2>Профиль</h2><div class="card"><label>Имя / название</label><input id="pn" maxlength="60" value="' + esc(m.name) + '"><label>О себе</label><textarea id="pa" rows="3" maxlength="400">' + esc(m.about) + '</textarea><label>Категория</label><select id="pcat">' + catOptions(m.category, '— не выбрана —') + '</select><label>Село</label><input id="pv" maxlength="40" placeholder="например Дарьинское" value="' + esc(m.village || '') + '"><label>Формат приёма</label><select id="pm"><option value="home"' + (m.mode === 'home' ? ' selected' : '') + '>Приём у себя (с адресом)</option><option value="visit"' + (m.mode === 'visit' ? ' selected' : '') + '>Выезд на дом</option><option value="both"' + (m.mode === 'both' ? ' selected' : '') + '>Оба варианта</option></select><label>Ваш адрес (для приёма у себя)</label><input id="pad" maxlength="100" placeholder="ул. Центральная, 1" value="' + esc(m.address || '') + '"><label>Номер карточки в Картотеке ЗКО</label><input id="pc" maxlength="40" placeholder="например daryinskoe-1101" value="' + esc(m.card || '') + '"><p class="muted small">Карточка нужна для VIP Light и VIP Premium (на «Бесплатном старте» не обязательна). Кнопка «Записаться онлайн» в справочнике откроет именно вашу страницу — даже если телефон в карточке записан иначе.</p>' + (m.card ? '' : '<a class="btn sec sm" target="_blank" rel="noopener" href="' + esc(cartUrl()) + '">➕ Добавить себя в Картотеку ЗКО</a>') + '<button class="btn ok" id="pSave">Сохранить</button></div><div class="card"><h3>Сменить ПИН-код</h3><hr class="sep"><label>Старый ПИН</label><input id="po" inputmode="numeric" maxlength="4" type="password"><label>Новый ПИН</label><input id="pw" inputmode="numeric" maxlength="4" type="password"><button class="btn sec" id="pPin">Сменить ПИН</button></div><div id="pE"></div>';
-  $('#pSave', el).onclick = function () { api('profileSave', { name: $('#pn').value, about: $('#pa').value, category: $('#pcat').value, village: $('#pv').value, mode: $('#pm').value, address: $('#pad').value, card: $('#pc').value }).then(function () { toast('Сохранено'); refreshCab('pf'); }).catch(function (e) { $('#pE', el).innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; }); };
+  el.innerHTML = '<h2>Профиль</h2><div class="card"><label>Имя / название</label><input id="pn" maxlength="60" value="' + esc(m.name) + '"><label>О себе</label><textarea id="pa" rows="3" maxlength="400">' + esc(m.about) + '</textarea><label>Категория</label><select id="pcat">' + catOptions(m.category, '— не выбрана —') + '</select><label>Где вы принимаете: область ➡️ район ➡️ село</label><div id="pGeo"></div><label>Формат приёма</label><select id="pm"><option value="home"' + (m.mode === 'home' ? ' selected' : '') + '>Приём у себя (с адресом)</option><option value="visit"' + (m.mode === 'visit' ? ' selected' : '') + '>Выезд на дом</option><option value="both"' + (m.mode === 'both' ? ' selected' : '') + '>Оба варианта</option></select><label>Ваш адрес (для приёма у себя)</label><input id="pad" maxlength="100" placeholder="ул. Центральная, 1" value="' + esc(m.address || '') + '"><label>Номер карточки в Картотеке ЗКО</label><input id="pc" maxlength="40" placeholder="например daryinskoe-1101" value="' + esc(m.card || '') + '"><p class="muted small">Карточка нужна для VIP Light и VIP Premium (на «Бесплатном старте» не обязательна). Кнопка «Записаться онлайн» в справочнике откроет именно вашу страницу — даже если телефон в карточке записан иначе.</p>' + (m.card ? '' : '<a class="btn sec sm" target="_blank" rel="noopener" href="' + esc(cartUrl()) + '">➕ Добавить себя в Картотеку ЗКО</a>') + '<button class="btn ok" id="pSave">Сохранить</button></div><div class="card"><h3>Сменить ПИН-код</h3><hr class="sep"><label>Старый ПИН</label><input id="po" inputmode="numeric" maxlength="4" type="password"><label>Новый ПИН</label><input id="pw" inputmode="numeric" maxlength="4" type="password"><button class="btn sec" id="pPin">Сменить ПИН</button></div><div id="pE"></div>';
+  var PG = mGeo(m); geoPick($('#pGeo', el), PG, { add: true });
+  $('#pSave', el).onclick = function () { api('profileSave', { name: $('#pn').value, about: $('#pa').value, category: $('#pcat').value, region: PG.r, district: PG.d, village: PG.v, mode: $('#pm').value, address: $('#pad').value, card: $('#pc').value }).then(function () { toast('Сохранено'); refreshCab('pf'); }).catch(function (e) { $('#pE', el).innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; }); };
   $('#pPin', el).onclick = function () { api('pinChange', { oldPin: $('#po').value, newPin: $('#pw').value }).then(function () { toast('ПИН изменён'); }).catch(function (e) { $('#pE', el).innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; }); };
 }
 
@@ -535,8 +572,13 @@ function init() {
   window.addEventListener('appinstalled', function () { ping('pwa'); });
   var nv = document.getElementById('nav');
   if (nv) Array.prototype.forEach.call(nv.querySelectorAll('button'), function (b) { b.onclick = function () { var n = b.getAttribute('data-n'); if (n === 'home') { if (DEMO) { TOKEN = ''; navGo('#/'); demoHome(); } else navGo('#/'); } else navGo(n === 'my' ? '#/my' : (n === 'cab' ? '#/cab' : '#/more')); }; });
-  var sw = document.getElementById('ownSw');
-  if (sw) { sw.checked = ls('zk_owner') === '1'; sw.onchange = function () { if (sw.checked) { ls('zk_owner', '1'); if (CFG.gatewayUrl && !DEMO) api('statPing', { dev: devId(), kind: 'visitor', owner: true }).catch(function () {}); toast('Режим Владельца включён: ваши визиты не считаются'); } else { ls('zk_owner', null); toast('Режим Владельца выключен'); } }; }
+  var ver = document.getElementById('ver');   // секретный вход: 5 быстрых нажатий по номеру версии включают/выключают «Режим Владельца»
+  if (ver) { ver.textContent = VERSION; var taps = [];
+    ver.onclick = function () {
+      var now = Date.now(); taps = taps.filter(function (x) { return now - x < 3000; }); taps.push(now); if (taps.length < 5) return; taps = [];
+      if (ls('zk_owner') === '1') { ls('zk_owner', null); toast('Режим Владельца выключен'); }
+      else { ls('zk_owner', '1'); if (CFG.gatewayUrl && !DEMO) api('statPing', { dev: devId(), kind: 'visitor', owner: true }).catch(function () {}); toast('Режим Владельца включён: ваши визиты не считаются'); }
+    }; }
 }
 init();
 })();
