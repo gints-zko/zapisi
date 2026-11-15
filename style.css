@@ -69,7 +69,7 @@ label{font-size:14px;color:var(--mut)}
 .consent a{color:inherit;text-decoration:underline;font-weight:700}
 .wn-card h3{margin:14px 0 2px;font-size:15px}.wn-card p{margin:2px 0;font-size:14px;line-height:1.45}
 
-/* v1.2.3 */
+/* v1.2.4 */
 #envtag{background:#ffb300;color:#2b1d00;font-weight:800;font-size:12px;padding:2px 8px;border-radius:8px}
 .notice{background:#fff4d6;color:#4a3500;border:1px solid #f0c75e;border-radius:12px;padding:10px 12px;margin:10px 0;font-size:14px;line-height:1.4}
 @media(prefers-color-scheme:dark){.notice{background:#3a3010;color:#ffe9a8;border-color:#7a6320}}
