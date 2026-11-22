@@ -1,7 +1,7 @@
-/* ЗКО Онлайн-записи v1.2.5 — клиентская часть (PWA). Секретов в файле нет; адрес шлюза берётся из config.json. */
+/* ЗКО Онлайн-записи v1.2.6 — клиентская часть (PWA). Секретов в файле нет; адрес шлюза берётся из config.json, адрес самого сайта — из браузера. */
 (function () {
 'use strict';
-var CFG = {}, TOKEN = '', APP = document.getElementById('app'), TIMER = null, VERSION = 'v1.2.5', DEMO = false, MEM = {};
+var CFG = {}, TOKEN = '', APP = document.getElementById('app'), TIMER = null, VERSION = 'v1.2.6', DEMO = false, MEM = {};
 var ERR = {
   bad_instagram: 'Укажите ссылку на Instagram или имя вида @name.', ig_premium: 'Ссылка на Instagram доступна на тарифе VIP Premium.', no_photo: 'Фото не найдено.', photo_unavailable: 'Фото сейчас недоступно.',
   auth_required: 'Нужно войти.', pin_required: 'Введите ПИН-код.', not_master: 'Этот номер не зарегистрирован как мастер.', blocked: 'Кабинет заблокирован администратором.',
@@ -14,6 +14,15 @@ var ERR = {
   no_service: 'Услуга не найдена.', bad_schedule: 'Проверьте часы: конец позже начала, перерыв внутри рабочего времени.', bad_date: 'Неверная дата.', no_history: 'В чёрный список можно добавить только того, кто записывался к вам.', bad_phone: 'Неверный номер.',
   bot_not_set: 'Сервис ещё не настроен (нет бота).', busy: 'Сервер занят, повторите через минуту.', bad_key: 'Ошибка сеанса, обновите страницу.', server_error: 'Ошибка сервера. Повторите позже.', net: 'Нет связи. Проверьте интернет.', no_gateway: 'Сервис ещё не подключён (не указан адрес шлюза в config.json).'
 };
+ERR.net = 'Нет связи с сервисом — похоже, пропал интернет. Проверьте связь и попробуйте ещё раз.';
+ERR.timeout = 'Сервер долго не отвечает. Проверьте интернет и нажмите «Повторить».';
+ERR.bad_response = 'Сервис сейчас отвечает не так, как обычно — возможно, идёт обновление. Подождите минуту и повторите.';
+ERR.server_error = 'Что-то пошло не так на нашей стороне. Подождите минуту и повторите.';
+ERR.no_gateway = 'Сервис ещё настраивается. Загляните чуть позже.';
+ERR.bot_not_set = 'Вход по коду пока недоступен — сервис ещё настраивается. Загляните чуть позже.';
+ERR.owner_bad_code = 'Код неверный. Проверьте цифры или запросите новый командой /code.';
+ERR.owner_code_none = 'Код не найден или устарел. Отправьте боту команду /code и введите новый код.';
+ERR.owner_locked = 'Слишком много неверных кодов. Отправьте боту /code — придёт новый код, и вход снова откроется.';
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 function ls(k, v) { if (DEMO && k !== 'zk_theme') { if (v === undefined) return MEM[k] === undefined ? null : MEM[k]; if (v === null) delete MEM[k]; else MEM[k] = String(v); return null; } try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} return null; }
 function toast(t) { var el = document.getElementById('toast'); el.textContent = t; el.className = 'show'; clearTimeout(toast.t); toast.t = setTimeout(function () { el.className = ''; }, 3200); }
@@ -33,16 +42,23 @@ function zkoToday() { var d = new Date(Date.now() + tzH() * 3600000); return d.g
 function addDay(s, n) { var p = s.split('-'); var d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2] + n)); return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + d.getUTCDate()).slice(-2); }
 function ruDate(s) { var p = s.split('-'), dn = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'], d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])); return dn[d.getUTCDay()] + ', ' + p[2] + '.' + p[1] + '.' + p[0]; }
 function rndKey() { var a = new Uint8Array(16); (window.crypto || {}).getRandomValues ? crypto.getRandomValues(a) : a.forEach(function (_, i) { a[i] = Math.floor(Math.random() * 256); }); return Array.prototype.map.call(a, function (b) { return ('0' + b.toString(16)).slice(-2); }).join(''); }
+var API_TIMEOUT = 20000;   /* ни один запрос не висит молча: через 20 секунд — понятный ответ и кнопка «Повторить» */
+function apiErr(code, action) { var er = new Error(code); er.zk = 1; er.action = action; return er; }
 function api(action, data) {
   var body = Object.assign({ action: action }, data || {}); if (TOKEN && body.token === undefined) body.token = TOKEN;
-  var done = function (j) { if (!j.ok) { if (j.error === 'auth_required' && TOKEN && !DEMO) { setToken(''); } var er = new Error(j.error || 'server_error'); er.data = j; throw er; } return j; };
+  var done = function (j) { if (!j || !j.ok) { j = j || {}; if (j.error === 'auth_required' && TOKEN && !DEMO) { setToken(''); } var er = apiErr(j.error || 'server_error', action); er.data = j; throw er; } return j; };
   /* ДЕМО: запрос выполняется в самой странице (demo.js), в сеть не уходит НИЧЕГО */
   if (DEMO) return window.ZKDemo.call(body).then(done);
-  if (!CFG.gatewayUrl) return Promise.reject(new Error('no_gateway'));
-  return fetch(CFG.gatewayUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) })
-    .then(function (r) { return r.json(); }, function () { throw new Error('net'); }).then(done);
+  if (!CFG.gatewayUrl) return Promise.reject(apiErr('no_gateway', action));
+  var ctl = window.AbortController ? new AbortController() : null, timedOut = false, tm = null;
+  var req = fetch(CFG.gatewayUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), signal: ctl ? ctl.signal : undefined })
+    .then(function (r) { return r.text(); })
+    .then(function (t) { try { return JSON.parse(t); } catch (e) { throw apiErr('bad_response', action); } })
+    .catch(function (e) { if (e && e.zk) throw e; throw apiErr(timedOut ? 'timeout' : 'net', action); });
+  var limit = new Promise(function (_, rej) { tm = setTimeout(function () { timedOut = true; if (ctl) { try { ctl.abort(); } catch (e) {} } rej(apiErr('timeout', action)); }, API_TIMEOUT); });
+  return Promise.race([req, limit]).then(function (j) { clearTimeout(tm); return done(j); }, function (e) { clearTimeout(tm); throw e; });
 }
-function errText(e) { var c = e && e.message; if (c === 'cloud_ban' && e.data && e.data.ban) return 'Запись закрыта' + (e.data.ban.until ? ' до ' + dmy(e.data.ban.until) : '') + '. Причина: ' + e.data.ban.reason + '.'; return ERR[c] || ('Ошибка: ' + c); }
+function errText(e) { var c = e && e.message; if (c === 'cloud_ban' && e.data && e.data.ban) return 'Запись закрыта' + (e.data.ban.until ? ' до ' + dmy(e.data.ban.until) : '') + '. Причина: ' + e.data.ban.reason + '.'; return ERR[c] || 'Не получилось выполнить действие. Попробуйте ещё раз.'; }
 function setToken(t) { TOKEN = t || ''; if (!DEMO) ls('zk_token', t || null); }
 function view(html) { stopTimer(); APP.innerHTML = html; window.scrollTo(0, 0); }
 function stopTimer() { if (TIMER) { clearInterval(TIMER); TIMER = null; } }
@@ -69,7 +85,11 @@ function modal(title, body) {
   box.innerHTML = '<div class="wn-card" role="dialog" aria-modal="true"><h2>' + esc(title) + '</h2>' + body + '<button class="btn" id="mdOk">[ Понятно, закрыть ]</button></div>';
   document.body.appendChild(box); document.getElementById('mdOk').onclick = function () { box.remove(); }; box.onclick = function (e) { if (e.target === box) box.remove(); };
 }
-function copyText(t, ok) { try { navigator.clipboard.writeText(t).then(function () { toast(ok || 'Скопировано'); }, function () { toast('Не удалось скопировать — выделите текст вручную'); }); } catch (e) { toast('Не удалось скопировать — выделите текст вручную'); } }
+function copyText(t, ok) {
+  function fb() { try { var ta = document.createElement('textarea'); ta.value = t; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0'; document.body.appendChild(ta); ta.select(); var r = document.execCommand('copy'); ta.remove(); if (r) { toast(ok || 'Скопировано'); return; } } catch (e) {} toast('Не удалось скопировать — выделите текст вручную'); }
+  try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t).then(function () { toast(ok || 'Скопировано'); }, fb); return; } } catch (e) {}
+  fb();
+}
 function navShow(on, act) { var n = document.getElementById('nav'); if (!n) return; n.hidden = !on; document.body.classList.toggle('hasnav', !!on); $$('button', n).forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-n') === act); }); }
 function navGo(h) { if ((location.hash || '#/') === h) route(); else go(h); }
 function devId() { var d = ls('zk_dev'); if (!d || d.length < 8) { d = rndKey().slice(0, 24); ls('zk_dev', d); } return d; }
@@ -126,11 +146,11 @@ function loginBlock(onDone, opts) {
 }
 
 /* ---------- главная ---------- */
-/* ---------- окно «Что нового?» (текст — в файле novosti.txt, пункт = строка, свежее сверху) ---------- */
+/* ---------- окно «Что нового?» (текст — в файле novosti.json, пункт = строка списка, свежее сверху) ---------- */
 var NOVOSTI_BAD = /(https?:\/\/|github|token|токен|парол|пароль|секрет|\.(?:txt|json|js|gs|py|html|css)\b|\bapi\b|[{}<>`]|\bsheet|лист\s+«)/i;
 function loadNovosti() {
-  return fetch('novosti.txt?v=' + encodeURIComponent(VERSION), { cache: 'no-store' }).then(function (r) { return r.ok ? r.text() : ''; }).catch(function () { return ''; })
-   .then(function (t) { return t.split(/\r?\n/).map(function (x) { return x.trim(); }).filter(function (x) { return x && x.charAt(0) !== '#' && !NOVOSTI_BAD.test(x); }).map(function (x) { return x.replace(/^[•\-*]\s*/, ''); }).slice(0, 30); });
+  return fetch('novosti.json?v=' + encodeURIComponent(VERSION), { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; })
+   .then(function (a) { return (Array.isArray(a) ? a : []).map(function (x) { return String(x || '').trim(); }).filter(function (x) { return x && !NOVOSTI_BAD.test(x); }).slice(0, 30); });
 }
 function whatsNew(force) {
   if (DEMO) return;
@@ -194,7 +214,7 @@ function home() {
     api('masters', { category: HS.category, token: '' }).then(function (j) {
       if (!$('#hGeo')) return; ALLM = j.masters;
       geoPick($('#hGeo'), HS, { ms: ALLM, onChange: drawList }); drawList();
-    }).catch(function (e) { var l = $('#hList'); if (l) l.innerHTML = '<div class="card muted small center">' + (e.message === 'no_gateway' ? 'Список мастеров появится после подключения сервиса.' : esc(errText(e))) + '</div>'; });
+    }).catch(function (e) { var l = $('#hList'); if (l) { l.innerHTML = e.message === 'no_gateway' ? '<div class="card muted small center">Список мастеров появится чуть позже — сервис ещё настраивается.</div>' : failHtml(e, 'список мастеров'); bindRetry(l, load); } });
   }
   $('#hCat').onchange = function () { HS.category = this.value; load(); };
   load();
@@ -202,10 +222,11 @@ function home() {
 /* ---------- вкладка «Ещё» ---------- */
 function morePage() {
   navShow(true, 'more');
-  view('<h1>Ещё</h1><button class="btn sec" id="mAbout">ℹ️ О сервисе</button><button class="btn sec" id="mNews">✨ Что нового в версии</button><button class="btn sec" id="mShare">📲 Поделиться ссылкой</button><button class="btn sec" id="mPwa">📲 Установка приложения (PWA)</button><button class="btn sec" id="mRef">🔄 Обновить данные</button><a class="btn sec" target="_blank" rel="noopener" href="' + esc(cartUrl()) + '">📖 Перейти в Картотеку ЗКО</a><a class="btn" target="_blank" rel="noopener" href="' + esc(cartUrl()) + '">➕ Добавить себя в Картотеку ЗКО</a><div class="card" id="mStat"><b>📊 Статистика платформы</b><p class="muted center">Загрузка…</p></div>');
+  view('<h1>☰ Ещё</h1><button class="btn help" id="mHelp">📖 Как пользоваться сайтом (инструкция)</button><button class="btn sec" id="mAbout">ℹ️ О сервисе</button><button class="btn sec" id="mNews">✨ Что нового в версии</button><button class="btn sec" id="mShare">📲 Поделиться ссылкой</button><button class="btn sec" id="mPwa">📲 Установка приложения (PWA)</button><button class="btn sec" id="mRef">🔄 Обновить данные</button><a class="btn sec" target="_blank" rel="noopener" href="' + esc(cartUrl()) + '">📖 Перейти в Картотеку ЗКО</a><a class="btn" target="_blank" rel="noopener" href="' + esc(cartUrl()) + '">➕ Добавить себя в Картотеку ЗКО</a><div class="card" id="mStat"><b>📊 Статистика платформы</b><p class="muted center">Загрузка…</p></div><div class="card" id="mProj"><b>🌐 Другие проекты ГИНЦ ЗКО</b>' + projectsHtml() + '</div><div class="verwrap"><span class="verchip" id="vChip">' + esc(VERSION) + '</span></div>');
+  $('#mHelp').onclick = function () { helpOpen('cl'); }; ownerHoldBind($('#vChip'));
   $('#mAbout').onclick = function () { modal('ℹ️ О сервисе', '<p>«ЗКО Онлайн-записи» — бесплатный сервис записи к мастерам Западно-Казахстанской области. Клиент выбирает услугу и время, мастер сразу получает уведомление в Телеграме.</p><p>Мастера из «Картотеки ЗКО» могут подключить кнопку «Записаться онлайн» прямо в своей карточке.</p><p class="muted small">Версия ' + esc(VERSION) + '</p>'); };
   $('#mNews').onclick = function () { whatsNew(true); };
-  $('#mShare').onclick = function () { var u = CFG.siteUrl || (location.origin + location.pathname.replace(/index\.html$/, '')); if (navigator.share) navigator.share({ title: 'ЗКО Онлайн-записи', text: 'Онлайн-запись к мастерам ЗКО', url: u }).catch(function () {}); else copyText(u, 'Ссылка скопирована'); };
+  $('#mShare').onclick = function () { var u = siteBase(); if (navigator.share) navigator.share({ title: 'ЗКО Онлайн-записи', text: 'Онлайн-запись к мастерам ЗКО', url: u }).catch(function () {}); else copyText(u, 'Ссылка скопирована'); };
   $('#mPwa').onclick = function () {
     if (DEFERRED) { DEFERRED.prompt(); DEFERRED.userChoice.then(function (r) { if (r && r.outcome === 'accepted') ping('pwa'); DEFERRED = null; }); return; }
     modal('📲 Установка приложения', '<p><b>Android (Chrome):</b> меню ⋮ → «Установить приложение» или «Добавить на главный экран».</p><p><b>iPhone (Safari):</b> кнопка «Поделиться» → «На экран Домой».</p><p class="muted small">Если приложение уже установлено, эта подсказка не нужна.</p>');
@@ -252,13 +273,13 @@ function masterPage(slug, tel, pre, card) {
   navShow(false);
   P = { slug: slug || '', pre: pre || [], sel: {}, cat: null, date: zkoToday(), key: ls('zk_hold') || (function () { var k = rndKey(); ls('zk_hold', k); return k; })(), slot: null, exp: 0 };
   view('<p class="muted center">Загрузка…</p>');
-  api('master', Object.assign({ token: '' }, slug ? { slug: slug } : {}, card ? { card: card } : {}, tel ? { tel: tel } : {})).then(function (j) { P.d = j; P.slug = j.master.slug; P.pre.forEach(function (id) { if (j.services.some(function (x) { return String(x.id) === id; })) P.sel[id] = 1; }); renderMaster(); }).catch(function (e) { view('<div class="err">' + esc(errText(e)) + '</div><button class="btn sec" onclick="location.hash=\'#/\'">На главную</button>'); });
+  api('master', Object.assign({ token: '' }, slug ? { slug: slug } : {}, card ? { card: card } : {}, tel ? { tel: tel } : {})).then(function (j) { P.d = j; P.slug = j.master.slug; P.pre.forEach(function (id) { if (j.services.some(function (x) { return String(x.id) === id; })) P.sel[id] = 1; }); renderMaster(); }).catch(function (e) { view(failHtml(e, 'страницу специалиста') + '<button class="btn sec" onclick="location.hash=\'#/\'">На главную</button>'); bindRetry(APP, function () { masterPage(slug, tel, pre, card); }); });
 }
 function cats() { var m = {}, o = []; P.d.services.forEach(function (s) { if (!m[s.category]) { m[s.category] = []; o.push(s.category); } m[s.category].push(s); }); return { map: m, order: o }; }
 function sumSel() { var n = 0, t = 0, m = 0; P.d.services.forEach(function (s) { if (P.sel[s.id]) { n++; t += s.price; m += s.minutes; } }); return { n: n, t: t, m: m }; }
 function renderMaster() {
   var d = P.d, c = cats(), r = d.rating, s = sumSel();
-  var h = '<div class="card"><h1>' + esc(d.master.name) + ' ' + tierBadge(d.master.tier) + '</h1>' + masterMeta(d.master) + (r.count ? '<div>' + stars(r.avg) + ' <b>' + r.avg + '</b> <span class="muted">· оценок: ' + r.count + '</span></div>' : '<div class="muted small">Оценок пока нет</div>') + (d.master.about ? '<p class="muted">' + esc(d.master.about) + '</p>' : '') + '<button class="btn sec sm" id="mRev">⭐ Отзывы</button></div>' + galleryHtml(d.master.photos || [], d.master.instagram || '') + (d.master.card ? '<div class="card"><a class="btn sec" target="_blank" rel="noopener" href="' + esc(cartUrl() + (cartUrl().indexOf('?') < 0 ? '?' : '&') + 'card=' + encodeURIComponent(d.master.card)) + '">📖 Карточка в Картотеке ЗКО</a></div>' : '');
+  var h = '<div class="card"><h1>' + esc(d.master.name) + ' ' + tierBadge(d.master.tier) + '</h1>' + masterMeta(d.master) + (r.count ? '<div>' + stars(r.avg) + ' <b>' + r.avg + '</b> <span class="muted">· оценок: ' + r.count + '</span></div>' : '<div class="muted small">Оценок пока нет</div>') + (d.master.about ? '<p class="muted">' + esc(d.master.about) + '</p>' : '') + '<button class="btn sec sm" id="mRev">⭐ Отзывы</button><button class="btn sec sm" id="mShr">📤 Поделиться</button>' + helpBtn('cl', '📖 Как записаться — подсказка') + '</div>' + galleryHtml(d.master.photos || [], d.master.instagram || '') + (d.master.card ? '<div class="card"><a class="btn sec" target="_blank" rel="noopener" href="' + esc(cartUrl() + (cartUrl().indexOf('?') < 0 ? '?' : '&') + 'card=' + encodeURIComponent(d.master.card)) + '">📖 Карточка в Картотеке ЗКО</a></div>' : '');
   if (!d.services.length) h += '<div class="card muted">У мастера пока нет услуг.</div>';
   else if (P.cat === null && c.order.length > 1) {
     h += '<h2>Выберите раздел</h2><div class="tiles">' + c.order.map(function (k, i) { var cnt = c.map[k].filter(function (x) { return P.sel[x.id]; }).length; return '<button class="tile' + (cnt ? ' on' : '') + '" data-c="' + esc(k) + '"><span class="em">' + EM[i % EM.length] + '</span>' + esc(k) + '<span class="n">' + c.map[k].length + ' усл.' + (cnt ? ' · выбрано ' + cnt : '') + '</span></button>'; }).join('') + '</div>';
@@ -273,6 +294,7 @@ function renderMaster() {
   var bk = $('#mBack'); if (bk) bk.onclick = function () { P.cat = null; renderMaster(); };
   $('#mNext').onclick = function () { P.date = zkoToday(); timePage(); };
   $('#mRev').onclick = reviewsPage;
+  $('#mShr').onclick = function () { shareProfile(P.slug, d.master.name, false); };
 }
 function reviewsPage() {
   view('<button class="back" id="bk">⬅️ Назад</button><h2>Отзывы</h2><p class="muted center">Загрузка…</p>');
@@ -280,12 +302,12 @@ function reviewsPage() {
   api('reviews', { slug: P.slug, token: '' }).then(function (j) {
     view('<button class="back" id="bk">⬅️ Назад</button><h2>Отзывы · ' + (j.rating.count ? j.rating.avg + ' из 5' : 'пока нет') + '</h2>' + (j.reviews.length ? j.reviews.map(function (r) { return '<div class="card">' + stars(r.stars) + ' <b>' + esc(r.name) + '</b> <span class="muted small">' + esc(r.date) + '</span><p>' + esc(r.comment || '') + '</p></div>'; }).join('') : '<p class="muted">Отзывы появляются только после состоявшихся визитов.</p>'));
     $('#bk').onclick = renderMaster;
-  });
+  }).catch(function (e) { view('<button class="back" id="bk">⬅️ Назад</button><h2>Отзывы</h2>' + failHtml(e, 'отзывы')); $('#bk').onclick = renderMaster; bindRetry(APP, reviewsPage); });
 }
 function selIds() { return Object.keys(P.sel); }
 function timePage() {
   var t = zkoToday(), tm = addDay(t, 1), s = sumSel();
-  var h = '<button class="back" id="bk">⬅️ Назад к услугам</button><div class="card"><b>' + esc(P.d.master.name) + '</b><div class="muted small">' + s.n + ' усл. · ' + dur(s.m) + ' · ' + money(s.t) + '</div></div><h2>Дата</h2><div class="chips"><button class="chip' + (P.date === t ? ' on' : '') + '" data-d="' + t + '">Сегодня</button><button class="chip' + (P.date === tm ? ' on' : '') + '" data-d="' + tm + '">Завтра</button><button class="chip' + (P.date !== t && P.date !== tm ? ' on' : '') + '" id="dOther">📅 ' + (P.date !== t && P.date !== tm ? ruDate(P.date) : 'Другая дата') + '</button></div><input type="date" id="dPick" min="' + t + '" max="' + addDay(t, 30) + '" hidden><h2>' + ruDate(P.date) + '</h2><div id="sl"><p class="muted center">Загрузка…</p></div>';
+  var h = '<button class="back" id="bk">⬅️ Назад к услугам</button>' + helpBtn('cl', '📖 Подсказка: как выбрать время') + '<div class="card"><b>' + esc(P.d.master.name) + '</b><div class="muted small">' + s.n + ' усл. · ' + dur(s.m) + ' · ' + money(s.t) + '</div></div><h2>Дата</h2><div class="chips"><button class="chip' + (P.date === t ? ' on' : '') + '" data-d="' + t + '">Сегодня</button><button class="chip' + (P.date === tm ? ' on' : '') + '" data-d="' + tm + '">Завтра</button><button class="chip' + (P.date !== t && P.date !== tm ? ' on' : '') + '" id="dOther">📅 ' + (P.date !== t && P.date !== tm ? ruDate(P.date) : 'Другая дата') + '</button></div><input type="date" id="dPick" min="' + t + '" max="' + addDay(t, 30) + '" hidden><h2>' + ruDate(P.date) + '</h2><div id="sl"><p class="muted center">Загрузка…</p></div>';
   view(h);
   $('#bk').onclick = function () { api('unhold', { key: P.key, token: '' }).catch(function () {}); renderMaster(); };
   $$('.chip[data-d]').forEach(function (b) { b.onclick = function () { P.date = b.getAttribute('data-d'); timePage(); }; });
@@ -295,7 +317,7 @@ function timePage() {
     var el = $('#sl'); if (!el) return;
     el.innerHTML = j.slots.length ? '<div class="slots">' + j.slots.map(function (x) { return '<button class="slot" data-t="' + x + '">' + x + '</button>'; }).join('') + '</div>' : '<div class="card muted center">На этот день свободного времени нет. Выберите другую дату.</div>';
     $$('.slot').forEach(function (b) { b.onclick = function () { holdSlot(b.getAttribute('data-t')); }; });
-  }).catch(function (e) { $('#sl').innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; });
+  }).catch(function (e) { var sl = $('#sl'); if (!sl) return; sl.innerHTML = failHtml(e, 'свободное время'); bindRetry(sl, timePage); });
 }
 function holdSlot(start) {
   api('hold', { slug: P.slug, date: P.date, start: start, serviceIds: selIds(), key: P.key, token: '' }).then(function (j) {
@@ -350,7 +372,7 @@ function myPage() {
     $$('[data-r]').forEach(function (b) { b.onclick = function () { ratePage(b.getAttribute('data-r')); }; });
     $$('[data-a]').forEach(function (b) { b.onclick = function () { masterPage(b.getAttribute('data-a'), '', [], ''); }; });
     $('#myOut').onclick = function () { if (DEMO) { TOKEN = ''; go('#/'); demoHome(); return; } api('logout').catch(function () {}); setToken(''); go('#/'); route(); };
-  }).catch(function (e) { if (e.message === 'auth_required') myPage(); else view('<div class="err">' + esc(errText(e)) + '</div>'); });
+  }).catch(function (e) { if (e.message === 'auth_required') myPage(); else { view('<h1>Мои записи</h1>' + failHtml(e, 'ваши записи')); bindRetry(APP, myPage); } });
 }
 function ratePage(id) {
   var st = 0;
@@ -364,15 +386,15 @@ function ratePage(id) {
 function cabEntry() {
   navShow(true, 'cab');
   if (DEMO && !TOKEN) return demoHome();
-  if (!TOKEN) { view('<h1>Кабинет мастера</h1><p class="muted">Вход по номеру телефона. Новый мастер регистрируется после подтверждения номера.</p>'); APP.appendChild(loginBlock(function () { cabEntry(); })); return; }
+  if (!TOKEN) { view('<h1>Кабинет мастера</h1><p class="muted">Вход по номеру телефона. Новый мастер регистрируется после подтверждения номера.</p>' + helpBtn('ms', '📖 Как вести запись — инструкция для мастера')); APP.appendChild(loginBlock(function () { cabEntry(); })); return; }
   api('me').then(function (j) {
     if (!j.isMaster) return regPage();
     if (j.needPin) return pinPage();
     CAB = j; if (j.owner) ls('zk_owner', '1'); ping('master'); cab(ls('zk_tab') || 'rec');
-  }).catch(function (e) { if (e.message === 'auth_required') cabEntry(); else view('<div class="err">' + esc(errText(e)) + '</div>'); });
+  }).catch(function (e) { if (e.message === 'auth_required') cabEntry(); else { view('<h1>Кабинет мастера</h1>' + failHtml(e, 'кабинет')); bindRetry(APP, cabEntry); } });
 }
 function regPage() {
-  view('<h1>Регистрация мастера</h1>' + tgNotice() + '<div class="card"><label>Ваше имя или название</label><input id="rn" maxlength="60" placeholder="Анара · Красота"><label>Категория (по ней создаётся адрес вашей страницы)</label><select id="rc">' + catOptions('', '— выберите —') + '</select><label>Где вы принимаете: область ➡️ район ➡️ село</label><div id="rGeo"></div><label>Формат приёма</label><select id="rm"><option value="home">Приём у себя (с адресом)</option><option value="visit">Выезд на дом</option><option value="both">Оба варианта</option></select><label>Ваш адрес (для приёма у себя)</label><input id="rd" maxlength="100" placeholder="ул. Центральная, 1"><label>О себе (по желанию)</label><textarea id="ra" rows="3" maxlength="400"></textarea><label>Придумайте ПИН-код (4 цифры)</label><input id="rp" inputmode="numeric" maxlength="4" type="password" placeholder="••••"><p class="muted small">ПИН защищает кабинет на новом устройстве. Запомните его: восстановить может только администратор.</p>' + consentHtml() + '<button class="btn ok" id="rOk">Создать кабинет</button><div id="rE"></div></div>');
+  view('<h1>Регистрация мастера</h1>' + helpBtn('ms', '📖 Подсказка для мастера') + tgNotice() + '<div class="card"><label>Ваше имя или название</label><input id="rn" maxlength="60" placeholder="Анара · Красота"><label>Категория (по ней создаётся адрес вашей страницы)</label><select id="rc">' + catOptions('', '— выберите —') + '</select><label>Где вы принимаете: область ➡️ район ➡️ село</label><div id="rGeo"></div><label>Формат приёма</label><select id="rm"><option value="home">Приём у себя (с адресом)</option><option value="visit">Выезд на дом</option><option value="both">Оба варианта</option></select><label>Ваш адрес (для приёма у себя)</label><input id="rd" maxlength="100" placeholder="ул. Центральная, 1"><label>О себе (по желанию)</label><textarea id="ra" rows="3" maxlength="400"></textarea><label>Придумайте ПИН-код (4 цифры)</label><input id="rp" inputmode="numeric" maxlength="4" type="password" placeholder="••••"><p class="muted small">ПИН защищает кабинет на новом устройстве. Запомните его: восстановить может только администратор.</p>' + consentHtml() + '<button class="btn ok" id="rOk">Создать кабинет</button><div id="rE"></div></div>');
   consentBind(APP);
   var RG = { r: '', d: '', v: '' }; geoPick($('#rGeo'), RG, { add: true });
   $('#rOk').onclick = function () { if (!$('#rc').value) { $('#rE').innerHTML = '<div class="err">Выберите категорию — по ней мастеру выдаётся адрес страницы.</div>'; return; } if (!consentOn(APP)) { $('#rE').innerHTML = '<div class="err">' + CONSENT_ERR + '</div>'; return; } api('masterRegister', { name: $('#rn').value, about: $('#ra').value, pin: $('#rp').value, category: $('#rc').value, region: RG.r, district: RG.d, village: RG.v, mode: $('#rm').value, address: $('#rd').value }).then(function () { toast('Кабинет создан!'); cabEntry(); }).catch(function (e) { $('#rE').innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; }); };
@@ -393,10 +415,11 @@ var TABS = [['rec', '📋 Записи'], ['svc', '💈 Услуги'], ['wk', '
 function cab(tab) {
   navShow(true, 'cab');
   ls('zk_tab', tab);
-  var m = CAB.master, link = (CFG.siteUrl || (location.origin + location.pathname.replace(/index\.html$/, ''))) + '?m=' + m.slug; if (DEMO) link = 'В демо ссылка не создаётся';
-  view('<div class="card"><b>' + esc(m.name) + '</b> ' + subBadge(CAB.sub) + '<div class="muted small">Ваша ссылка для клиентов:</div><input readonly id="lnk" value="' + esc(link) + '" onclick="this.select()"><button class="btn sec sm" id="cp">📋 Копировать ссылку</button><button class="btn sec sm" id="cNews">✨ Что нового в версии</button><button class="btn sec sm" id="cRef">🔄 Обновить статус и баланс</button><button class="btn sec sm" id="cOut">Выйти</button></div><div class="tabs">' + TABS.map(function (t) { return '<button class="tab' + (t[0] === tab ? ' on' : '') + '" data-t="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '<button class="tab' + (tab === 'pf' ? ' on' : '') + '" data-t="pf">⚙️ Профиль</button></div><div id="tb"></div>');
+  var m = CAB.master, link = siteBase() + '?m=' + m.slug; if (DEMO) link = 'В демо ссылка не создаётся';
+  view('<div class="card"><b>' + esc(m.name) + '</b> ' + subBadge(CAB.sub) + '<div class="muted small">Ваша ссылка для клиентов:</div><input readonly id="lnk" value="' + esc(link) + '" onclick="this.select()"><button class="btn sm" id="cShare">📤 Поделиться моим профилем</button><button class="btn sec sm" id="cp">📋 Копировать ссылку</button><button class="btn sec sm" data-help="ms">📖 Инструкция для мастера</button><button class="btn sec sm" id="cNews">✨ Что нового в версии</button><button class="btn sec sm" id="cRef">🔄 Обновить статус и баланс</button><button class="btn sec sm" id="cOut">Выйти</button></div><div class="tabs">' + TABS.map(function (t) { return '<button class="tab' + (t[0] === tab ? ' on' : '') + '" data-t="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '<button class="tab' + (tab === 'pf' ? ' on' : '') + '" data-t="pf">⚙️ Профиль</button></div><div id="tb"></div>');
   $$('.tab').forEach(function (b) { b.onclick = function () { cab(b.getAttribute('data-t')); }; });
-  $('#cp').onclick = function () { try { navigator.clipboard.writeText(link); toast('Ссылка скопирована'); } catch (e) { $('#lnk').select(); } };
+  $('#cp').onclick = function () { if (DEMO) { toast('В демо ссылка не создаётся'); return; } copyText(link, 'Ссылка скопирована'); };
+  $('#cShare').onclick = function () { if (DEMO) { toast('В демо «Поделиться» не работает — в настоящем кабинете откроется меню телефона'); return; } shareProfile(m.slug, m.name, true); };
   $('#cNews').onclick = function () { whatsNew(true); };
   $('#cRef').onclick = function () { refreshCab(tab); toast('Статус и баланс обновлены'); };
   $('#cOut').onclick = function () { if (DEMO) { TOKEN = ''; go('#/'); demoHome(); return; } api('logout').catch(function () {}); setToken(''); go('#/'); route(); };
@@ -411,7 +434,7 @@ function tRec(el) {
     el.innerHTML = '<h2>Записи на 14 дней</h2>' + (j.bookings.length ? j.bookings.map(function (b) { var st = stl[b.status] || [b.status, '']; return '<div class="card"><b>' + ruDate(b.date) + ' · ' + esc(b.start) + '</b> <span class="badge ' + st[1] + '">' + st[0] + '</span><br>👤 ' + esc(b.name) + ' · +' + esc(b.client) + (b.place === 'c' ? '<br>🚗 Выезд: ' + esc(b.addr) : '') + '<br>💈 ' + esc(b.services) + ' · ' + money(b.total) + '<div>' + (b.status === 'booked' ? '<button class="btn ok sm" data-s="done" data-i="' + b.id + '">✔ Визит завершён</button><button class="btn sec sm" data-s="noshow" data-i="' + b.id + '">❌ Клиент не пришёл</button><button class="btn red sm" data-s="cancelled" data-i="' + b.id + '">❌ Отменить</button>' : '') + (b.status === 'noshow' || b.status === 'done' ? '<button class="btn sec sm" data-bl="' + b.id + '">🚫 В чёрный список</button>' : '') + '</div></div>'; }).join('') : '<div class="card muted">Записей пока нет.</div>');
     $$('[data-s]', el).forEach(function (b) { b.onclick = function () { var s = b.getAttribute('data-s'); if (s === 'cancelled' && !confirm('Отменить запись? Клиент получит уведомление.')) return; if (s === 'noshow' && !confirm('Отметить: клиент не пришёл? 100 ₸ с баланса не спишутся. После 3 неявок клиент получит бан на 14 дней.')) return; api('bookingMark', { id: b.getAttribute('data-i'), status: s }).then(function () { toast('Готово'); tRec(el); }).catch(function (e) { toast(errText(e)); }); }; });
     $$('[data-bl]', el).forEach(function (b) { b.onclick = function () { if (confirm('Добавить клиента в ваш чёрный список?')) api('blAdd', { bookingId: b.getAttribute('data-bl') }).then(function () { toast('Клиент в чёрном списке'); }).catch(function (e) { toast(errText(e)); }); }; });
-  }).catch(function (e) { el.innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; });
+  }).catch(function (e) { el.innerHTML = failHtml(e, 'записи'); bindRetry(el, function () { tRec(el); }); });
 }
 function visitFee(v) { var n = Math.round(+String(v).replace(/\s/g, '')) || 0; return n >= 1 && n < 1000 ? 50 : (n >= 1000 && n <= 10000 ? 100 : 200); }
 var SEC = { beauty: ['Стрижки', 'Окрашивание', 'Укладки', 'Маникюр и педикюр', 'Брови и ресницы'], massage: ['Массаж', 'Баня', 'Сауна'], auto: ['Диагностика', 'Шиномонтаж', 'Ремонт', 'Техобслуживание'], health: ['Приём и консультация', 'Лечение', 'Гигиена и профилактика'], septic: ['Откачка', 'Вывоз', 'Аренда техники'], home: ['Сантехника', 'Электрика', 'Отделка', 'Мелкий ремонт'], photo: ['Фотосъёмка', 'Видеосъёмка', 'Праздники'], edu: ['Школьная программа', 'Иностранные языки', 'Подготовка к экзаменам'], other: ['Разное'] };
@@ -462,7 +485,7 @@ function tCl(el) {
   api('blList').then(function (j) {
     el.innerHTML = '<h2>Мой чёрный список</h2><p class="muted small">Заблокированный клиент не сможет записаться к вам. Если один номер получит блокировки от 3 разных мастеров, он блокируется на всей платформе.</p>' + (j.list.length ? j.list.map(function (c) { return '<div class="card">👤 ' + esc(c.name || 'Клиент') + ' · +' + esc(c.phone) + '<div><button class="btn sec sm" data-u="' + esc(c.phone) + '">♻️ Убрать</button></div></div>'; }).join('') : '<div class="card muted">Список пуст. Добавить клиента можно во вкладке «Записи» (после визита или неявки).</div>');
     $$('[data-u]', el).forEach(function (b) { b.onclick = function () { api('blRemove', { phone: b.getAttribute('data-u') }).then(function () { tCl(el); }); }; });
-  }).catch(function (e) { el.innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; });
+  }).catch(function (e) { el.innerHTML = failHtml(e, 'чёрный список'); bindRetry(el, function () { tCl(el); }); });
 }
 function tRv(el) {
   el.innerHTML = '<p class="muted center">Загрузка…</p>';
@@ -526,7 +549,7 @@ function tBal(el) {
     var w = what.value, amt = w === 'light' ? Math.max(0, parseInt($('#kAm', el).value, 10) || 0) : 0, label = w === 'light' ? 'пополнение VIP Light на ' + amt + ' ₸' : 'VIP Premium (' + (pr.filter(function (x) { return x.key === w; })[0] || {}).label + ')';
     var text = 'Здравствуйте! Оплатил(а) через Kaspi: ' + label + '. Мастер: ' + CAB.master.name + ' (' + CAB.master.slug + '), телефон +' + CAB.phone + '. Комментарий к переводу: ' + $('#kCm', el).value + '. Прикрепляю чек из Kaspi. Прошу зачислить.';
     if (DEMO) { toast('В демо ничего не отправляется'); return; }
-    var u = k.tg ? 'https://t.me/' + encodeURIComponent(k.tg) + '?text=' + encodeURIComponent(text) : 'https://t.me/share/url?url=' + encodeURIComponent(CFG.siteUrl || location.href.split('#')[0]) + '&text=' + encodeURIComponent(text);
+    var u = k.tg ? 'https://t.me/' + encodeURIComponent(k.tg) + '?text=' + encodeURIComponent(text) : 'https://t.me/share/url?url=' + encodeURIComponent(siteBase()) + '&text=' + encodeURIComponent(text);
     window.open(u, '_blank');
     api('topupRequest', { amount: amt }).then(function () { toast('Владельцу отправлено уведомление. Пришлите чек в чат.'); }).catch(function (e) { toast(errText(e)); });
   };
@@ -539,6 +562,130 @@ function tPf(el) {
   $('#pPin', el).onclick = function () { api('pinChange', { oldPin: $('#po').value, newPin: $('#pw').value }).then(function () { toast('ПИН изменён'); }).catch(function (e) { $('#pE', el).innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; }); };
 }
 
+/* ---------- v1.2.6: адрес сайта из браузера, «Поделиться», инструкция, ошибки двух уровней, кабинет владельца ---------- */
+/* Адрес сайта определяется динамически (origin + папка без index.html): при переезде на свой домен код менять не нужно.
+   «адресСайта» из config.json — только резерв (например, если страница открыта как файл). */
+function siteBase() {
+  var base = '';
+  try { if (/^https?:$/.test(location.protocol)) base = location.origin + location.pathname.replace(/[^\/]*$/, ''); } catch (e) {}
+  if (!base) { base = String(CFG.siteUrl || '').replace(/[?#].*$/, ''); if (base && base.slice(-1) !== '/') base += '/'; }
+  return base || './';
+}
+var PROJECTS = [['📅 ЗКО Онлайн-записи', 'https://gints-zko.github.io/zapisi/'], ['🎈 Миллион шаров • Уральск', 'https://gints-zko.github.io/shar/']];
+function projectsHtml() {
+  return PROJECTS.map(function (x) { return '<a class="btn sec" target="_blank" rel="noopener" href="' + esc(x[1]) + '">' + esc(x[0]) + '</a>'; }).join('') + '<a class="btn sec" target="_blank" rel="noopener" href="' + esc(cartUrl()) + '">📖 Картотека ЗКО</a>';
+}
+/* «📤 Поделиться»: системное меню телефона; если его нет — текст и ссылка копируются в буфер */
+function shareProfile(slug, name, own) {
+  var link = siteBase() + '?m=' + encodeURIComponent(slug);
+  var text = own ? 'Здравствуйте! Записывайтесь ко мне онлайн — выберите услугу и удобное время в пару нажатий, без звонков и переписки.' : 'Рекомендую специалиста «' + name + '». Записаться можно онлайн — выберите услугу и удобное время:';
+  var full = text + '\n' + link;
+  if (navigator.share) {
+    navigator.share({ title: own ? 'Запись онлайн — ' + name : name + ' — запись онлайн', text: text, url: link }).catch(function (e) { if (e && e.name === 'AbortError') return; copyText(full, 'Ссылка на профиль скопирована'); });
+  } else copyText(full, 'Ссылка на профиль скопирована');
+}
+/* Уровень 1 (обычные посетители): только спокойный человеческий текст и кнопка «Повторить» */
+var NETC = { net: 1, timeout: 1, bad_response: 1, server_error: 1, busy: 1 };
+function failHtml(e, what) {
+  var c = e && e.message;
+  var t = NETC[c] ? 'Не удалось загрузить ' + what + ' — похоже, пропал интернет или сервер долго отвечает. Проверьте связь и нажмите «Повторить».' : errText(e);
+  return '<div class="err">' + esc(t) + '</div><button class="btn sec js-retry">🔄 Повторить</button>';
+}
+function bindRetry(root, fn) { $$('.js-retry', root).forEach(function (b) { b.onclick = fn; }); }
+/* инструкция */
+var HELP_NAV = false;
+function helpBtn(tab, label) { return '<button class="helpbtn" data-help="' + tab + '">' + (label || '📖 Подсказка: как это работает') + '</button>'; }
+function helpOpen(tab) { HELP_NAV = true; go('#/help/' + tab); }
+function helpPage(tab) {
+  tab = tab === 'ms' ? 'ms' : 'cl'; navShow(true, 'more');
+  var H = window.ZKHELP || { cl: [], ms: [], intro: {} }, L = H[tab] || [];
+  view('<button class="back" id="hBk">⬅️ Назад</button><h1>📖 Как пользоваться сайтом</h1><div class="tabs help-tabs"><button class="tab' + (tab === 'cl' ? ' on' : '') + '" data-ht="cl">👤 Для клиентов (как записаться к специалисту)</button><button class="tab' + (tab === 'ms' ? ' on' : '') + '" data-ht="ms">💼 Для мастеров и специалистов (как вести запись)</button></div>' + (H.intro && H.intro[tab] ? '<p class="muted">' + H.intro[tab] + '</p>' : '') + L.map(function (x, i) { return '<details class="hp"' + (i === 0 ? ' open' : '') + '><summary>' + x[0] + '</summary><div class="hb">' + x[1] + '</div></details>'; }).join('') + '<button class="btn sec" id="hBk2">⬅️ Назад</button>');
+  function back() { if (HELP_NAV) { HELP_NAV = false; history.back(); } else go('#/more'); }
+  $('#hBk').onclick = back; $('#hBk2').onclick = back;
+  $$('[data-ht]').forEach(function (b) { b.onclick = function () { try { history.replaceState(null, '', '#/help/' + b.getAttribute('data-ht')); } catch (e) {} helpPage(b.getAttribute('data-ht')); }; });
+}
+/* ---------- вход и кабинет владельца: удержание плашки с номером версии 2 секунды; одноразовый код — из бота (/code) ---------- */
+var OWN = { token: '' };
+try { OWN.token = sessionStorage.getItem('zk_otok') || ''; } catch (e) {}
+var HOLD_MS = 2000;
+function ownerHoldBind(el) {
+  if (!el || el.getAttribute('data-oh')) return; el.setAttribute('data-oh', '1');
+  var t = null;
+  function stop() { if (t) { clearTimeout(t); t = null; } el.classList.remove('holding'); }
+  el.addEventListener('pointerdown', function () { if (t) return; el.classList.add('holding'); t = setTimeout(function () { t = null; el.classList.remove('holding'); try { if (navigator.vibrate) navigator.vibrate(30); } catch (e) {} ownerGate(); }, HOLD_MS); });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (n) { el.addEventListener(n, stop); });
+  el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+}
+function ownerGate() {
+  if (DEMO) { toast('В демо кабинет владельца недоступен'); return; }
+  if (OWN.token) { if ((location.hash || '') === '#/owner') route(); else go('#/owner'); return; }
+  var old = document.getElementById('ownBox'); if (old) old.remove();
+  var box = document.createElement('div'); box.id = 'ownBox'; box.className = 'wn-back';
+  box.innerHTML = '<div class="wn-card" role="dialog" aria-modal="true"><h2>🛠 Вход владельца</h2><p class="muted small">Откройте нашего Телеграм-бота, отправьте команду <b>/code</b> и введите полученный одноразовый код (6 цифр, действует 5 минут).</p><input id="ownIn" inputmode="numeric" autocomplete="one-time-code" maxlength="12" placeholder="Код владельца"><div id="ownE"></div><button class="btn" id="ownOk">Войти</button><button class="btn sec" id="ownNo">Отмена</button></div>';
+  document.body.appendChild(box);
+  var inp = box.querySelector('#ownIn'), er = box.querySelector('#ownE'); inp.focus();
+  box.querySelector('#ownNo').onclick = function () { box.remove(); }; box.onclick = function (e) { if (e.target === box) box.remove(); };
+  function submit() {
+    var v = inp.value.replace(/\D/g, ''); if (v.length !== 6) { er.innerHTML = '<div class="err">Введите 6 цифр кода.</div>'; return; }
+    er.innerHTML = '<p class="muted small">Проверяю…</p>';
+    api('ownerLogin', { code: v, token: '' }).then(function (j) {
+      OWN.token = j.token; try { sessionStorage.setItem('zk_otok', j.token); } catch (e) {}
+      ls('zk_owner', '1'); api('statPing', { dev: devId(), kind: 'visitor', token: j.token }).catch(function () {});
+      box.remove(); toast('Вход владельца выполнен'); if ((location.hash || '') === '#/owner') route(); else go('#/owner');
+    }).catch(function (e) { er.innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; });
+  }
+  box.querySelector('#ownOk').onclick = submit; inp.onkeydown = function (e) { if (e.key === 'Enter') submit(); };
+}
+/* Уровень 2 (только кабинет владельца): шаг остановки, причина простым языком, подсказка. Без кода и stack trace. */
+function ownerErr(e) {
+  var c = e && e.message;
+  var M = {
+    timeout: ['Сервер не ответил за 20 секунд.', 'Проверьте мобильный интернет и нажмите «Обновить облачный шлюз» в пульте.'],
+    net: ['Нет связи с облачным шлюзом (интернет или неверный адрес).', 'Проверьте интернет и строку «Адрес шлюза» в secrets.txt.'],
+    bad_response: ['Шлюз ответил не по правилам: скрипту, вероятно, не выданы разрешения или идёт обновление.', 'Откройте ссылку шлюза в браузере, нажмите «Проверить разрешения», затем в пульте нажмите «Обновить облачный шлюз».'],
+    bad_action: ['В шлюзе старый код без кабинета владельца.', 'Нажмите «Обновить облачный шлюз» в пульте.'],
+    server_error: ['Шлюз сообщил о внутреннем сбое.', 'Загляните в лист «Журнал действий» в Таблице или нажмите «Обновить облачный шлюз» в пульте.'],
+    no_gateway: ['Пустой или некорректный адрес шлюза.', 'Проверьте строку «Адрес шлюза» в secrets.txt, нажмите «Обновить облачный шлюз», затем «Залить сайт на GitHub».'],
+    auth_required: ['Сеанс владельца закончился.', 'Отправьте боту /code и войдите заново.'], forbidden: ['Этот сеанс не принадлежит владельцу.', 'Отправьте боту /code и войдите заново.']
+  };
+  return M[c] || ['Шлюз вернул неожиданный ответ.', 'Повторите проверку. Если повторяется — нажмите «Обновить облачный шлюз» в пульте.'];
+}
+function ownerPage() {
+  navShow(true, 'more');
+  if (!OWN.token) { home(); ownerGate(); return; }
+  view('<h1>🛠 Кабинет владельца</h1><p class="muted center">Проверяю связь с облачным шлюзом…</p>');
+  var N = 7, all = [];
+  all.push(CFG.gatewayUrl ? { ok: true, title: 'Настройки сайта: адрес шлюза найден' } : { ok: false, title: 'Настройки сайта: адрес шлюза', reason: 'Пустой или некорректный адрес шлюза.', hint: 'Проверьте строку «Адрес шлюза» в secrets.txt, нажмите «Обновить облачный шлюз», затем «Залить сайт на GitHub».' });
+  all.push({ ok: true, title: 'Адрес сайта определён из браузера: ' + siteBase() });
+  var pr = CFG.gatewayUrl ? api('ownerPanel', { token: OWN.token }) : Promise.reject(apiErr('no_gateway', 'ownerPanel'));
+  pr.then(function (j) { j.steps.forEach(function (x) { all.push({ ok: x.ok, title: x.title, reason: x.reason, hint: x.hint }); }); draw(j); })
+    .catch(function (e) {
+      if (e.message === 'auth_required' || e.message === 'forbidden') { OWN.token = ''; try { sessionStorage.removeItem('zk_otok'); } catch (x) {} }
+      var d = ownerErr(e); if (CFG.gatewayUrl || all.length < 3) all.push({ ok: false, title: 'Связь с облачным шлюзом и Google Таблицей', reason: d[0], hint: d[1] }); draw(null);
+    });
+  function diagText() {
+    var L = ['Диагностика «ЗКО Онлайн-записи» ' + VERSION, 'Время проверки: ' + new Date().toLocaleString('ru-RU'), ''];
+    all.forEach(function (x, i) { L.push('Шаг ' + (i + 1) + ' из ' + N + ': ' + x.title + ' — ' + (x.ok ? 'ОК' : 'СБОЙ')); if (!x.ok) { L.push('  Причина: ' + x.reason); L.push('  Что сделать: ' + x.hint); } });
+    var bad = all.filter(function (x) { return !x.ok; })[0]; L.push(''); L.push(bad ? 'Итог: найден сбой — «' + bad.title + '». Остановился на шаге ' + (all.indexOf(bad) + 1) + ' из ' + N + '.' : 'Итог: всё в порядке.');
+    return L.join('\n');
+  }
+  function draw(j) {
+    var bad = all.some(function (x) { return !x.ok; });
+    var h = '<h1>🛠 Кабинет владельца</h1><div class="card"><b>' + (bad ? '⚠️ Есть что исправить' : '✅ Всё работает') + '</b> <span class="muted small">· ' + esc(VERSION) + '</span>' + all.map(function (x, i) { return '<div class="dstep"><div>' + (x.ok ? '✅' : '❌') + ' <b>Шаг ' + (i + 1) + ' из ' + N + ':</b> ' + esc(x.title) + '</div>' + (x.ok ? '' : '<div class="err small">Причина: ' + esc(x.reason) + '<br>Что сделать: ' + esc(x.hint) + '</div>') + '</div>'; }).join('') + '</div>';
+    if (j) {
+      var st = j.stats || {}, v = st.visitor || { today: 0, month: 0, devices: 0 }, ms = st.master || { today: 0, month: 0, devices: 0 }, c = j.counts || {};
+      h += '<div class="card"><b>📊 Сводка</b><div class="row"><span>Мастеров</span><b>' + (c.masters || 0) + '</b></div><div class="row"><span>Записей всего / на сегодня</span><b>' + (c.bookings || 0) + ' / ' + (c.today || 0) + '</b></div><div class="row"><span>Посетители: сегодня / месяц / всего</span><b>' + v.today + ' / ' + v.month + ' / ' + v.devices + '</b></div><div class="row"><span>Мастера: сегодня / месяц / всего</span><b>' + ms.today + ' / ' + ms.month + ' / ' + ms.devices + '</b></div></div>';
+    }
+    var b = siteBase();
+    h += '<div class="card"><b>🔗 Ссылки (адрес берётся из браузера)</b><p class="muted small">Витрина:</p><input readonly value="' + esc(b) + '" onclick="this.select()"><p class="muted small">Ссылка мастера (шаблон):</p><input readonly value="' + esc(b + '?m=ИМЯ_МАСТЕРА') + '" onclick="this.select()"><p class="muted small">Мост для Картотеки:</p><input readonly value="' + esc(b + '?card=НОМЕР_КАРТОЧКИ') + '" onclick="this.select()"><input readonly value="' + esc(b + '?tel=ТЕЛЕФОН') + '" onclick="this.select()"></div>';
+    h += '<button class="btn" id="oCp">📋 Скопировать диагностику</button><button class="btn sec" id="oRe">🔄 Проверить снова</button><button class="btn sec" id="oOut">🚪 Выйти из режима владельца</button>';
+    view(h);
+    $('#oCp').onclick = function () { copyText(diagText(), 'Диагностика скопирована'); };
+    $('#oRe').onclick = ownerPage;
+    $('#oOut').onclick = function () { OWN.token = ''; try { sessionStorage.removeItem('zk_otok'); } catch (e) {} ls('zk_owner', null); toast('Вы вышли из режима владельца'); go('#/more'); };
+  }
+}
+
 /* ---------- маршрутизация ---------- */
 function route() {
   if (DEMO && (location.hash || '#/') === '#/') return demoHome();
@@ -546,6 +693,8 @@ function route() {
   if (h === '#/more') return morePage();
   if (h === '#/my') return myPage();
   if (h === '#/cab') return cabEntry();
+  if (h === '#/owner') return ownerPage();
+  if (h.indexOf('#/help') === 0) return helpPage(h.indexOf('/ms') > 0 ? 'ms' : 'cl');
   /* мост с Картотекой: ?m=<имя-ссылка мастера> или ?tel=<телефон мастера из карточки>, по желанию &u=<номера услуг через запятую> */
   var m = (q.get('m') || '').toLowerCase(), tel = (q.get('tel') || q.get('phone') || q.get('t') || '').replace(/[^\d+]/g, '');
   var pre = (q.get('u') || '').split(',').map(function (x) { return x.replace(/[^A-Za-z0-9]/g, ''); }).filter(Boolean).slice(0, 10);
@@ -572,13 +721,9 @@ function init() {
   window.addEventListener('appinstalled', function () { ping('pwa'); });
   var nv = document.getElementById('nav');
   if (nv) Array.prototype.forEach.call(nv.querySelectorAll('button'), function (b) { b.onclick = function () { var n = b.getAttribute('data-n'); if (n === 'home') { if (DEMO) { TOKEN = ''; navGo('#/'); demoHome(); } else navGo('#/'); } else navGo(n === 'my' ? '#/my' : (n === 'cab' ? '#/cab' : '#/more')); }; });
-  var ver = document.getElementById('ver');   // секретный вход: 5 быстрых нажатий по номеру версии включают/выключают «Режим Владельца»
-  if (ver) { ver.textContent = VERSION; var taps = [];
-    ver.onclick = function () {
-      var now = Date.now(); taps = taps.filter(function (x) { return now - x < 3000; }); taps.push(now); if (taps.length < 5) return; taps = [];
-      if (ls('zk_owner') === '1') { ls('zk_owner', null); toast('Режим Владельца выключен'); }
-      else { ls('zk_owner', '1'); if (CFG.gatewayUrl && !DEMO) api('statPing', { dev: devId(), kind: 'visitor', owner: true }).catch(function () {}); toast('Режим Владельца включён: ваши визиты не считаются'); }
-    }; }
+  var ver = document.getElementById('ver');   // вход владельца: удержание плашки с номером версии ровно 2 секунды → окно ввода кода
+  if (ver) { ver.textContent = VERSION; ver.classList.add('verchip'); ownerHoldBind(ver); }
+  APP.addEventListener('click', function (e) { var hb = e.target.closest && e.target.closest('[data-help]'); if (hb) helpOpen(hb.getAttribute('data-help')); });
 }
 init();
 })();
